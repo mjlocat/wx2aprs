@@ -32,3 +32,4 @@ This project is meant to be used in conjunction with the database written to by 
 
 * Precipitation information (rain last hour, rain last 24 hours, rain since midnight)
 * Barometric pressure
+* Optional comment
