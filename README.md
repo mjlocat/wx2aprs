@@ -23,9 +23,9 @@ This project is meant to be used in conjunction with the database written to by 
   ``` shell
   crontab -e
   SHELL=/bin/bash
-  */5 * * * * source ~/.bashrc && cd ~/wx2aprs && MESSAGE=`python3 wx2aprs.py` && beacon -c N0CALL -d "APRS WIDE2-2" -s radio0 "${MESSAGE}"
-  # ^- This should be the number        ^- Replace this with the directory of               ^- Replace with your        ^- Replace with the port
-  #    of minutes between reports          this repository                                     callsign+ssid               defined in axports
+  */5 * * * * source ~/.bashrc && cd ~/wx2aprs && MESSAGE=`python3 wx2aprs.py` && /usr/sbin/beacon -c N0CALL -d "APRS WIDE2-2" -s radio0 "${MESSAGE}"
+  # ^- This should be the number        ^- Replace this with the directory of                          ^- Replace with your        ^- Replace with the port
+  #    of minutes between reports          this repository                                                callsign+ssid               defined in axports
   ```
 
 ## TODO
