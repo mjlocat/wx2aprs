@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, time
 import math
 import os
 from dotenv import load_dotenv
@@ -6,11 +6,14 @@ import mysql.connector
 from tzlocal import get_localzone
 import pytz
 
+rainquery = "SELECT rain FROM rain WHERE ts BETWEEN %(mints)s AND %(maxts)s GROUP BY rain, ts ORDER BY ts"
 
-def get_min_max_ts_period(timestamp):
-    minutes_average = int(os.getenv("AVERAGE_MINUTES"))
+def get_min_max_ts_period(timestamp, minutes_back = None):
+    if minutes_back is None:
+        minutes_back = int(os.getenv("AVERAGE_MINUTES"))
+
     data = {
-        'mints': timestamp - (minutes_average * 60),
+        'mints': timestamp - (minutes_back * 60),
         'maxts': timestamp
     }
     return data
@@ -106,15 +109,61 @@ def get_temperature(cnx, timestamp):
     return "t..."
 
 
+def get_rain_over_period(cursor):
+    count = 0
+    row = cursor.fetchone()
+    if row is None:
+        return None
+
+    last = row[0]
+    while row is not None:
+        if last < row[0]:
+            count = count + (row[0] - last)
+            last = row[0]
+        elif last > row[0]:
+            count = count + (100 + row[0] - last)
+            last = row[0]
+        row = cursor.fetchone()
+
+    return count
+
+
 def get_rain_hour(cnx, timestamp):
+    data = get_min_max_ts_period(timestamp, 60)
+    cursor = cnx.cursor()
+    cursor.execute(rainquery, data)
+    rain = get_rain_over_period(cursor)
+    cursor.close()
+    if rain is not None:
+        return "r{:03d}".format(rain)
+
     return "r..."
 
 
 def get_rain_24hour(cnx, timestamp):
+    data = get_min_max_ts_period(timestamp, 1440)
+    cursor = cnx.cursor()
+    cursor.execute(rainquery, data)
+    rain = get_rain_over_period(cursor)
+    cursor.close()
+    if rain is not None:
+        return "p{:03d}".format(rain)
+
     return "p..."
 
 
-def get_rain_midnight(cnx, timestamp):
+def get_rain_midnight(cnx, current_timestamp, midnight_timestamp):
+    data = {
+        'mints': midnight_timestamp,
+        'maxts': current_timestamp
+    }
+    cursor = cnx.cursor()
+    cursor.execute(rainquery, data)
+    rain = get_rain_over_period(cursor)
+    cursor.close()
+    if rain is not None:
+        return "P{:03d}".format(rain)
+
     return "P..."
 
 
@@ -182,6 +231,7 @@ def main():
     current_timestamp = now.timestamp()
     tz = get_localzone()
     utc = tz.localize(now).astimezone(pytz.utc)
+    midnight_timestamp = datetime.combine(now, time.min).timestamp()
 
     wind_direction = get_wind_direction(cnx, current_timestamp)
     wind_speed = get_wind_speed(cnx, current_timestamp)
@@ -189,7 +239,7 @@ def main():
     temperature = get_temperature(cnx, current_timestamp)
     rain_hour = get_rain_hour(cnx, current_timestamp)
     rain_24hour = get_rain_24hour(cnx, current_timestamp)
-    rain_midnight = get_rain_midnight(cnx, current_timestamp)
+    rain_midnight = get_rain_midnight(cnx, current_timestamp, midnight_timestamp)
     pressure = get_pressure(cnx, current_timestamp)
     humidity = get_humidity(cnx, current_timestamp)
     lat_formatted = format_latitude()
