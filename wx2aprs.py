@@ -1,10 +1,11 @@
 from datetime import datetime, time
-import math
 import os
 from dotenv import load_dotenv
 import mysql.connector
 from tzlocal import get_localzone
 import pytz
+from scipy.signal import medfilt
+from numpy import mean
 
 rainquery = "SELECT rain FROM rain WHERE ts BETWEEN %(mints)s AND %(maxts)s GROUP BY rain, ts ORDER BY ts"
 
@@ -20,19 +21,18 @@ def get_min_max_ts_period(timestamp, minutes_back = None):
 
 
 def get_average_from_cursor(cursor):
-    sum = 0
-    count = 0
+    readings = []
     row = cursor.fetchone()
     while row is not None:
-        sum = sum + row[0]
-        count = count + 1
+        readings.append(row[0])
         row = cursor.fetchone()
 
-    if (count > 0):
-        average = sum / count
-        return math.trunc(average)
+    if len(readings) == 0:
+        return None
 
-    return None
+    smooth_readings = medfilt(readings)
+
+    return int(mean(smooth_readings))
 
 
 def get_wind_direction(cnx, timestamp):
@@ -82,15 +82,21 @@ def get_wind_speed(cnx, timestamp):
 
 
 def get_wind_gust(cnx, timestamp):
-    query = "SELECT max(windspeed) FROM windspeed WHERE ts BETWEEN %(mints)s AND %(maxts)s"
+    readings = []
+    query = "SELECT windspeed FROM windspeed WHERE ts BETWEEN %(mints)s AND %(maxts)s GROUP BY windspeed, ts"
     data = get_min_max_ts_period(timestamp)
     cursor = cnx.cursor()
     cursor.execute(query, data)
     row = cursor.fetchone()
+    while row is not None:
+        readings.append(row[0])
+        row = cursor.fetchone()
+
     cursor.close()
-    if row is not None:
-        max = math.floor(row[0])
-        return "g{:03d}".format(max)
+    if len(readings) > 0:
+        smooth_readings = medfilt(readings)
+        gust = int(max(smooth_readings))
+        return "g{:03d}".format(gust)
 
     return "g..."
 
@@ -110,22 +116,28 @@ def get_temperature(cnx, timestamp):
 
 
 def get_rain_over_period(cursor):
-    count = 0
+    readings = []
     row = cursor.fetchone()
-    if row is None:
-        return None
-
-    last = row[0]
     while row is not None:
-        if last < row[0]:
-            count = count + (row[0] - last)
-            last = row[0]
-        elif last > row[0]:
-            count = count + (100 + row[0] - last)
-            last = row[0]
+        readings.append(row[0])
         row = cursor.fetchone()
 
-    return count
+    if len(readings) == 0:
+        return None
+
+    smooth_readings = medfilt(readings)
+
+    count = 0
+    last = smooth_readings[0]
+    for reading in smooth_readings:
+        if last < reading:
+            count = count + (reading - last)
+            last = reading
+        elif last > reading:
+            count = count + (100 + reading - last)
+            last = reading
+
+    return int(count)
 
 
 def get_rain_hour(cnx, timestamp):
@@ -191,7 +203,7 @@ def get_humidity(cnx, timestamp):
 
 def format_longitude():
     long_degrees = float(os.getenv('STATION_LONG_DEG'))
-    degrees = abs(math.trunc(long_degrees))
+    degrees = abs(int(long_degrees))
     minutes = (abs(long_degrees) - degrees) * 60
     if long_degrees < 0:
         sign = "W"
@@ -203,7 +215,7 @@ def format_longitude():
 
 def format_latitude():
     lat_degrees = float(os.getenv('STATION_LAT_DEG'))
-    degrees = abs(math.trunc(lat_degrees))
+    degrees = abs(int(lat_degrees))
     minutes = (abs(lat_degrees) - degrees) * 60
     if lat_degrees < 0:
         sign = "S"

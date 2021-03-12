@@ -30,6 +30,15 @@ This project is meant to be used in conjunction with the database written to by 
 
 ## TODO
 
-* Precipitation information (rain last hour, rain last 24 hours, rain since midnight)
 * Barometric pressure
 * Optional comment
+
+## Notes
+
+I've found that the readings I'm getting off the weather station have occasional erroneous values. Some examples I've found:
+
+* Temperature reading of 164 degrees, skewing the 5 minute temperature average by 9 degrees
+* Wind speed reading of 158 MPH, resulting in a bad 5 minute wind gust
+* Rain reading jumping from 53 to 99 and back to 53, resulting in an inch of rain being recorded
+
+To resolve this, we need to find a way to smooth out these erroneous values using a filter. The scipy signal module has a function called medfilt which will filter an array using the median value over a sliding window. After some testing, this seems to have done the trick. I'm using the default window size of 3 to start. If consecutive erroneous values come up, that window size will not be enough and will have to widen it to compensate.
