@@ -8,6 +8,7 @@ from scipy.signal import medfilt
 from numpy import mean
 
 rainquery = "SELECT rain FROM rain WHERE ts BETWEEN %(mints)s AND %(maxts)s GROUP BY rain, ts ORDER BY ts"
+window_size = 3 # default, will be overridden by environment settings further down
 
 def get_min_max_ts_period(timestamp, minutes_back = None):
     if minutes_back is None:
@@ -30,7 +31,7 @@ def get_average_from_cursor(cursor):
     if len(readings) == 0:
         return None
 
-    smooth_readings = medfilt(readings)
+    smooth_readings = medfilt(readings, window_size)
 
     return int(mean(smooth_readings))
 
@@ -94,7 +95,7 @@ def get_wind_gust(cnx, timestamp):
 
     cursor.close()
     if len(readings) > 0:
-        smooth_readings = medfilt(readings)
+        smooth_readings = medfilt(readings, window_size)
         gust = int(max(smooth_readings))
         return "g{:03d}".format(gust)
 
@@ -125,7 +126,7 @@ def get_rain_over_period(cursor):
     if len(readings) == 0:
         return None
 
-    smooth_readings = medfilt(readings)
+    smooth_readings = medfilt(readings, window_size)
 
     count = 0
     last = smooth_readings[0]
@@ -226,7 +227,9 @@ def format_latitude():
 
 
 def getEnvironment():
+    global window_size
     load_dotenv()
+    window_size = int(os.getenv("WINDOW_SIZE"))
 
 
 def main():
