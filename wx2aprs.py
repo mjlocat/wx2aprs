@@ -122,7 +122,7 @@ def get_rain_over_period(cursor):
         readings.append(row[0])
         row = cursor.fetchone()
 
-    if len(readings) == 0:
+    if len(readings) < window_size:
         return None
 
     smooth_readings = medfilt(readings, window_size)
@@ -133,9 +133,12 @@ def get_rain_over_period(cursor):
         if last < reading:
             count = count + (reading - last)
             last = reading
-        elif last > reading:
+        elif last > 900 and reading < 100:
             count = count + (100 + reading - last)
             last = reading
+        elif last > reading:
+            # Bad reading in there, bail out
+            return None
 
     return int(count)
 
@@ -242,7 +245,7 @@ def main():
     cnx = mysql.connector.connect(**dbconfig)
 
     now = datetime.now()
-    # now = datetime.fromtimestamp(1618776900)
+    # now = datetime.fromtimestamp(1617352500)
     current_timestamp = now.timestamp()
     tz = get_localzone()
     utc = tz.localize(now).astimezone(pytz.utc)
