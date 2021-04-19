@@ -28,11 +28,10 @@ def get_average_from_cursor(cursor):
         readings.append(row[0])
         row = cursor.fetchone()
 
-    if len(readings) == 0:
+    if len(readings) < window_size:
         return None
 
     smooth_readings = medfilt(readings, window_size)
-
     return int(mean(smooth_readings))
 
 
@@ -243,6 +242,7 @@ def main():
     cnx = mysql.connector.connect(**dbconfig)
 
     now = datetime.now()
+    # now = datetime.fromtimestamp(1618776900)
     current_timestamp = now.timestamp()
     tz = get_localzone()
     utc = tz.localize(now).astimezone(pytz.utc)
