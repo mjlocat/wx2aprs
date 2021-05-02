@@ -32,7 +32,7 @@ def get_average_from_cursor(cursor):
         return None
 
     smooth_readings = medfilt(readings, window_size)
-    return int(mean(smooth_readings))
+    return mean(smooth_readings)
 
 
 def get_wind_direction(cnx, timestamp):
@@ -73,7 +73,7 @@ def get_wind_speed(cnx, timestamp):
     cursor = cnx.cursor()
     cursor.execute(query, data)
 
-    average = get_average_from_cursor(cursor)
+    average = int(get_average_from_cursor(cursor))
     cursor.close()
     if average is not None:
         return "/{:03d}".format(average)
@@ -107,7 +107,7 @@ def get_temperature(cnx, timestamp):
     cursor = cnx.cursor()
     cursor.execute(query, data)
 
-    average = get_average_from_cursor(cursor)
+    average = int(get_average_from_cursor(cursor))
     cursor.close()
     if average is not None:
         return "t{:03d}".format(average)
@@ -183,7 +183,17 @@ def get_rain_midnight(cnx, current_timestamp, midnight_timestamp):
 
 
 def get_pressure(cnx, timestamp):
-    # TODO: Not implemented until I get a barometric pressure sensor
+    query = "SELECT pressure FROM pressure WHERE ts BETWEEN %(mints)s and %(maxts)s GROUP BY pressure, ts"
+    data = get_min_max_ts_period(timestamp)
+    cursor = cnx.cursor()
+    cursor.execute(query, data)
+
+    average = get_average_from_cursor(cursor)
+    cursor.close()
+    if average is not None:
+        tenths = int(average * 10)
+        return "b{:05d}".format(tenths)
+
     return "b....."
 
 
@@ -193,7 +203,7 @@ def get_humidity(cnx, timestamp):
     cursor = cnx.cursor()
     cursor.execute(query, data)
 
-    average = get_average_from_cursor(cursor)
+    average = int(get_average_from_cursor(cursor))
     cursor.close()
     if average is not None:
         if average == 100:
