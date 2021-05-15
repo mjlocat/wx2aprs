@@ -1,4 +1,5 @@
 from datetime import datetime, time
+import math
 import os
 from dotenv import load_dotenv
 import mysql.connector
@@ -35,33 +36,55 @@ def get_average_from_cursor(cursor):
     return mean(smooth_readings)
 
 
-def get_wind_direction(cnx, timestamp):
-    # TODO: This is only the most recent direction. Want to try to get the predomenent direction for the reporting period
-    query = "SELECT winddirection FROM winddirection order by ts desc limit 1"
+def get_prevailing_wind_dir(cursor):
+    # Algorithm based on information here: https://www.wxforum.net/index.php?topic=8660.0
     dir_dict = {
         "N": 0,
-        "NNE": 22,
+        "NNE": 22.5,
         "NE": 45,
-        "ENE": 67,
+        "ENE": 67.5,
         "E": 90,
-        "ESE": 112,
+        "ESE": 112.5,
         "SE": 135,
-        "SSE": 157,
+        "SSE": 157.5,
         "S": 180,
-        "SSW": 202,
+        "SSW": 202.5,
         "SW": 225,
-        "WSW": 247,
+        "WSW": 247.5,
         "W": 270,
-        "WNW": 292,
+        "WNW": 292.5,
         "NW": 315,
-        "NNW": 337
+        "NNW": 337.5
     }
-    cursor = cnx.cursor()
-    cursor.execute(query)
+    s_ns = 0 # Sum of the North/South wind components
+    s_ew = 0 # Sum of the East/West wind components
     row = cursor.fetchone()
+    while row is not None:
+        direction_degrees = dir_dict[row[0]]
+        direction_radians = math.radians(direction_degrees)
+        windspeed = row[1]
+        c_ns = math.cos(direction_radians) * windspeed # North/South component
+        c_ew = math.sin(direction_radians) * windspeed # East/West component
+        s_ns = s_ns + c_ns
+        s_ew = s_ew + c_ew
+        row = cursor.fetchone()
+
+    p_direction_radians = math.atan2(s_ew, s_ns)
+    p_direction = math.degrees(p_direction_radians)
+    if p_direction < 0:
+        p_direction = p_direction + 360
+
+    return p_direction
+
+
+def get_wind_direction(cnx, timestamp):
+    query = "SELECT d.winddirection, s.windspeed FROM winddirection d INNER JOIN windspeed s ON d.ts = s.ts WHERE d.ts BETWEEN %(mints)s AND %(maxts)s GROUP BY d.winddirection, s.windspeed, d.ts"
+    data = get_min_max_ts_period(timestamp)
+    cursor = cnx.cursor()
+    cursor.execute(query, data)
+    direction = int(get_prevailing_wind_dir(cursor))
     cursor.close()
-    if row is not None:
-        direction = dir_dict[row[0]]
+    if direction is not None:
         return "_{:03d}".format(direction)
 
     return "_..."
