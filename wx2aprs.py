@@ -10,6 +10,8 @@ from numpy import mean
 
 rainquery = "SELECT rain FROM rain WHERE ts BETWEEN %(mints)s AND %(maxts)s GROUP BY rain, ts ORDER BY ts"
 window_size = 3 # default, will be overridden by environment settings further down
+max_rain = 127 # Maximum value returned from the rain gauge
+max_rain_delta = 3 # Delta on either side of the roll over to check for a valid roll over
 
 def get_min_max_ts_period(timestamp, minutes_back = None):
     if minutes_back is None:
@@ -156,8 +158,8 @@ def get_rain_over_period(cursor):
         if last < reading:
             count = count + (reading - last)
             last = reading
-        elif last > 900 and reading < 100:
-            count = count + (100 + reading - last)
+        elif last > (max_rain - max_rain_delta) and reading < max_rain_delta:
+            count = count + (max_rain + 1 + reading - last)
             last = reading
         elif last > reading:
             # Bad reading in there, bail out
