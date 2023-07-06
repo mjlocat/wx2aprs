@@ -2,5 +2,5 @@ python-dotenv==0.15.0
 mysql-connector-python==8.0.23
 tzlocal==2.1
 pytz==2021.1
-scipy==1.6.1
+scipy==1.10.0
 numpy==1.20.1
