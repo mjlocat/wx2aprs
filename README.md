@@ -10,10 +10,15 @@ This project is meant to be used in conjunction with the database written to by 
 
 ## Installation
 
-* Install the Python requirements
-  ``` shell
-  pip3 install -r requirements.txt
-  ```
+* Install the Python requirements: You can install the Python requirements using pip3 for most cases. Debian 12 prefers you use the packages from the apt repositories instead
+  * Install using pip3
+    ``` shell
+    pip3 install -r requirements.txt
+    ```
+  * Install using Debian packages repository
+    ``` shell
+    sh ./install-deps-debian.sh
+    ```
 * Create your `.env` file from the sample and update as specified
   ``` shell
   cp env.sample .env
@@ -30,7 +35,6 @@ This project is meant to be used in conjunction with the database written to by 
 
 ## TODO
 
-* Barometric pressure
 * Optional comment
 
 ## Notes

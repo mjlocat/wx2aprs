@@ -2,16 +2,20 @@ from datetime import datetime, time
 import math
 import os
 from dotenv import load_dotenv
-import mysql.connector
+import MySQLdb
 from tzlocal import get_localzone
-import pytz
+import zoneinfo
 from scipy.signal import medfilt
 from numpy import mean
+import numpy
+import sys
+
+numpy.set_printoptions(threshold=sys.maxsize)
 
 rainquery = "SELECT rain FROM rain WHERE ts BETWEEN %(mints)s AND %(maxts)s GROUP BY rain, ts ORDER BY ts"
 window_size = 3 # default, will be overridden by environment settings further down
 max_rain = 127 # Maximum value returned from the rain gauge
-max_rain_delta = 3 # Delta on either side of the roll over to check for a valid roll over
+max_rain_delta = 20 #3 # Delta on either side of the roll over to check for a valid roll over
 
 def get_min_max_ts_period(timestamp, minutes_back = None):
     if minutes_back is None:
@@ -151,7 +155,6 @@ def get_rain_over_period(cursor):
         return None
 
     smooth_readings = medfilt(readings, window_size)
-
     count = 0
     last = smooth_readings[0]
     for reading in smooth_readings:
@@ -277,13 +280,14 @@ def main():
         'host': os.getenv('DBHOST'),
         'database': os.getenv('DBDATABASE')
     }
-    cnx = mysql.connector.connect(**dbconfig)
+    cnx = MySQLdb.connect(**dbconfig)
 
     now = datetime.now()
     # now = datetime.fromtimestamp(1617352500)
     current_timestamp = now.timestamp()
     tz = get_localzone()
-    utc = tz.localize(now).astimezone(pytz.utc)
+    UTC = zoneinfo.ZoneInfo("UTC")
+    utc = now.astimezone(UTC)
     midnight_timestamp = datetime.combine(now, time.min).timestamp()
 
     wind_direction = get_wind_direction(cnx, current_timestamp)
