@@ -1,311 +1,143 @@
-from datetime import datetime, time
-import math
+from datetime import datetime, timezone
 import os
-from dotenv import load_dotenv
-import MySQLdb
-from tzlocal import get_localzone
-import zoneinfo
-from scipy.signal import medfilt
-from numpy import mean
-import numpy
 import sys
+import threading
 
-numpy.set_printoptions(threshold=sys.maxsize)
+import paho.mqtt.client as mqtt
+from dotenv import load_dotenv
 
-rainquery = "SELECT rain FROM rain WHERE ts BETWEEN %(mints)s AND %(maxts)s GROUP BY rain, ts ORDER BY ts"
-window_size = 3 # default, will be overridden by environment settings further down
-max_rain = 127 # Maximum value returned from the rain gauge
-max_rain_delta = 20 #3 # Delta on either side of the roll over to check for a valid roll over
-
-def get_min_max_ts_period(timestamp, minutes_back = None):
-    if minutes_back is None:
-        minutes_back = int(os.getenv("AVERAGE_MINUTES"))
-
-    data = {
-        'mints': timestamp - (minutes_back * 60),
-        'maxts': timestamp
-    }
-    return data
-
-
-def get_average_from_cursor(cursor):
-    readings = []
-    row = cursor.fetchone()
-    while row is not None:
-        readings.append(row[0])
-        row = cursor.fetchone()
-
-    if len(readings) < window_size:
-        return None
-
-    smooth_readings = medfilt(readings, window_size)
-    return mean(smooth_readings)
+# Topic suffixes under the topic prefix (default house/wx/). Aggregation and
+# smoothing are done upstream, so each topic holds a ready-to-use value.
+TOPICS = [
+    "wind_dir_avg_5m",      # degrees
+    "wind_speed_avg_5m",    # mph
+    "wind_speed_peak_5m",   # mph
+    "temperature_avg_5m",   # degrees F
+    "rain_1h",              # inches
+    "rain_24h",             # inches
+    "rain_today",           # inches
+    "humidity_avg_5m",      # percent
+]
 
 
-def get_prevailing_wind_dir(cursor):
-    # Algorithm based on information here: https://www.wxforum.net/index.php?topic=8660.0
-    dir_dict = {
-        "N": 0,
-        "NNE": 22.5,
-        "NE": 45,
-        "ENE": 67.5,
-        "E": 90,
-        "ESE": 112.5,
-        "SE": 135,
-        "SSE": 157.5,
-        "S": 180,
-        "SSW": 202.5,
-        "SW": 225,
-        "WSW": 247.5,
-        "W": 270,
-        "WNW": 292.5,
-        "NW": 315,
-        "NNW": 337.5
-    }
-    s_ns = 0 # Sum of the North/South wind components
-    s_ew = 0 # Sum of the East/West wind components
-    row = cursor.fetchone()
-    while row is not None:
-        direction_degrees = dir_dict[row[0]]
-        direction_radians = math.radians(direction_degrees)
-        windspeed = row[1]
-        c_ns = math.cos(direction_radians) * windspeed # North/South component
-        c_ew = math.sin(direction_radians) * windspeed # East/West component
-        s_ns = s_ns + c_ns
-        s_ew = s_ew + c_ew
-        row = cursor.fetchone()
+def fetch_readings(host, port, prefix, timeout):
+    """Read the (retained) values from the broker. Missing topics are omitted."""
+    readings = {}
+    done = threading.Event()
 
-    p_direction_radians = math.atan2(s_ew, s_ns)
-    p_direction = math.degrees(p_direction_radians)
-    if p_direction < 0:
-        p_direction = p_direction + 360
+    def on_connect(client, userdata, flags, reason_code, properties=None):
+        client.subscribe([(prefix + t, 0) for t in TOPICS])
 
-    return p_direction
+    def on_message(client, userdata, msg):
+        name = msg.topic[len(prefix):]
+        try:
+            readings[name] = float(msg.payload.decode().strip())
+        except ValueError:
+            return  # Unparseable payload, treat as missing
+        if len(readings) == len(TOPICS):
+            done.set()
+
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.connect(host, port, keepalive=int(timeout) + 5)
+    client.loop_start()
+    done.wait(timeout)
+    client.loop_stop()
+    client.disconnect()
+    return readings
 
 
-def get_wind_direction(cnx, timestamp):
-    query = "SELECT d.winddirection, s.windspeed FROM winddirection d INNER JOIN windspeed s ON d.ts = s.ts WHERE d.ts BETWEEN %(mints)s AND %(maxts)s GROUP BY d.winddirection, s.windspeed, d.ts"
-    data = get_min_max_ts_period(timestamp)
-    cursor = cnx.cursor()
-    cursor.execute(query, data)
-    direction = int(get_prevailing_wind_dir(cursor))
-    cursor.close()
-    if direction is not None:
-        return "_{:03d}".format(direction)
-
-    return "_..."
+def fmt(value, template, missing):
+    if value is None:
+        return missing
+    return template.format(int(round(value)))
 
 
-def get_wind_speed(cnx, timestamp):
-    query = "SELECT windspeed FROM windspeed WHERE ts BETWEEN %(mints)s AND %(maxts)s GROUP BY windspeed, ts"
-    data = get_min_max_ts_period(timestamp)
-    cursor = cnx.cursor()
-    cursor.execute(query, data)
-
-    average = int(get_average_from_cursor(cursor))
-    cursor.close()
-    if average is not None:
-        return "/{:03d}".format(average)
-
-    return "/..."
+def get_wind_direction(r):
+    v = r.get("wind_dir_avg_5m")
+    return "_..." if v is None else "_{:03d}".format(int(round(v)) % 360)
 
 
-def get_wind_gust(cnx, timestamp):
-    readings = []
-    query = "SELECT windspeed FROM windspeed WHERE ts BETWEEN %(mints)s AND %(maxts)s GROUP BY windspeed, ts"
-    data = get_min_max_ts_period(timestamp)
-    cursor = cnx.cursor()
-    cursor.execute(query, data)
-    row = cursor.fetchone()
-    while row is not None:
-        readings.append(row[0])
-        row = cursor.fetchone()
-
-    cursor.close()
-    if len(readings) > 0:
-        smooth_readings = medfilt(readings, window_size)
-        gust = int(max(smooth_readings))
-        return "g{:03d}".format(gust)
-
-    return "g..."
+def get_wind_speed(r):
+    return fmt(r.get("wind_speed_avg_5m"), "/{:03d}", "/...")
 
 
-def get_temperature(cnx, timestamp):
-    query = "SELECT temperature FROM temperature WHERE ts BETWEEN %(mints)s AND %(maxts)s GROUP BY temperature, ts"
-    data = get_min_max_ts_period(timestamp)
-    cursor = cnx.cursor()
-    cursor.execute(query, data)
-
-    average = int(get_average_from_cursor(cursor))
-    cursor.close()
-    if average is not None:
-        return "t{:03d}".format(average)
-
-    return "t..."
+def get_wind_gust(r):
+    return fmt(r.get("wind_speed_peak_5m"), "g{:03d}", "g...")
 
 
-def get_rain_over_period(cursor):
-    readings = []
-    row = cursor.fetchone()
-    while row is not None:
-        readings.append(row[0])
-        row = cursor.fetchone()
-
-    if len(readings) < window_size:
-        return None
-
-    smooth_readings = medfilt(readings, window_size)
-    count = 0
-    last = smooth_readings[0]
-    for reading in smooth_readings:
-        if last < reading:
-            count = count + (reading - last)
-            last = reading
-        elif last > (max_rain - max_rain_delta) and reading < max_rain_delta:
-            count = count + (max_rain + 1 + reading - last)
-            last = reading
-        elif last > reading:
-            # Bad reading in there, bail out
-            return None
-
-    return int(count)
+def get_temperature(r):
+    return fmt(r.get("temperature_avg_5m"), "t{:03d}", "t...")
 
 
-def get_rain_hour(cnx, timestamp):
-    data = get_min_max_ts_period(timestamp, 60)
-    cursor = cnx.cursor()
-    cursor.execute(rainquery, data)
-    rain = get_rain_over_period(cursor)
-    cursor.close()
-    if rain is not None:
-        return "r{:03d}".format(rain)
-
-    return "r..."
+def rain_hundredths(r, name):
+    v = r.get(name)
+    return None if v is None else v * 100
 
 
-def get_rain_24hour(cnx, timestamp):
-    data = get_min_max_ts_period(timestamp, 1440)
-    cursor = cnx.cursor()
-    cursor.execute(rainquery, data)
-    rain = get_rain_over_period(cursor)
-    cursor.close()
-    if rain is not None:
-        return "p{:03d}".format(rain)
-
-    return "p..."
+def get_rain_hour(r):
+    return fmt(rain_hundredths(r, "rain_1h"), "r{:03d}", "r...")
 
 
-def get_rain_midnight(cnx, current_timestamp, midnight_timestamp):
-    data = {
-        'mints': midnight_timestamp,
-        'maxts': current_timestamp
-    }
-    cursor = cnx.cursor()
-    cursor.execute(rainquery, data)
-    rain = get_rain_over_period(cursor)
-    cursor.close()
-    if rain is not None:
-        return "P{:03d}".format(rain)
-
-    return "P..."
+def get_rain_24hour(r):
+    return fmt(rain_hundredths(r, "rain_24h"), "p{:03d}", "p...")
 
 
-def get_pressure(cnx, timestamp):
-    query = "SELECT pressure FROM pressure WHERE ts BETWEEN %(mints)s and %(maxts)s GROUP BY pressure, ts"
-    data = get_min_max_ts_period(timestamp)
-    cursor = cnx.cursor()
-    cursor.execute(query, data)
-
-    average = get_average_from_cursor(cursor)
-    cursor.close()
-    if average is not None:
-        tenths = int(average * 10)
-        return "b{:05d}".format(tenths)
-
-    return "b....."
+def get_rain_midnight(r):
+    return fmt(rain_hundredths(r, "rain_today"), "P{:03d}", "P...")
 
 
-def get_humidity(cnx, timestamp):
-    query = "SELECT humidity FROM humidity WHERE ts BETWEEN %(mints)s AND %(maxts)s GROUP BY humidity, ts"
-    data = get_min_max_ts_period(timestamp)
-    cursor = cnx.cursor()
-    cursor.execute(query, data)
+def get_pressure(r):
+    # Pressure has not been moved to MQTT yet, so it is always unavailable.
+    v = r.get("pressure")
+    return "b....." if v is None else "b{:05d}".format(int(round(v * 10)))
 
-    average = int(get_average_from_cursor(cursor))
-    cursor.close()
-    if average is not None:
-        if average == 100:
-            return "h00"
 
-        return "h{:02d}".format(average)
+def get_humidity(r):
+    v = r.get("humidity_avg_5m")
+    if v is None:
+        return "h.."
+    v = int(round(v))
+    return "h00" if v >= 100 else "h{:02d}".format(v)
 
-    return "h.."
+
+def format_coordinate(degrees_decimal, pos, neg, width):
+    degrees = abs(int(degrees_decimal))
+    minutes = (abs(degrees_decimal) - degrees) * 60
+    sign = neg if degrees_decimal < 0 else pos
+    return "{:0{w}d}{:05.2f}{}".format(degrees, minutes, sign, w=width)
 
 
 def format_longitude():
-    long_degrees = float(os.getenv('STATION_LONG_DEG'))
-    degrees = abs(int(long_degrees))
-    minutes = (abs(long_degrees) - degrees) * 60
-    if long_degrees < 0:
-        sign = "W"
-    else:
-        sign = "E"
-
-    return "{}{:05.2f}{}".format(degrees, minutes, sign)
+    return format_coordinate(float(os.getenv("STATION_LONG_DEG")), "E", "W", 3)
 
 
 def format_latitude():
-    lat_degrees = float(os.getenv('STATION_LAT_DEG'))
-    degrees = abs(int(lat_degrees))
-    minutes = (abs(lat_degrees) - degrees) * 60
-    if lat_degrees < 0:
-        sign = "S"
-    else:
-        sign = "N"
-
-    return "{}{:05.2f}{}".format(degrees, minutes, sign)
-
-
-def getEnvironment():
-    global window_size
-    load_dotenv()
-    window_size = int(os.getenv("WINDOW_SIZE"))
+    return format_coordinate(float(os.getenv("STATION_LAT_DEG")), "N", "S", 2)
 
 
 def main():
-    getEnvironment()
-    dbconfig = {
-        'user': os.getenv('DBUSER'),
-        'password': os.getenv('DBPASS'),
-        'host': os.getenv('DBHOST'),
-        'database': os.getenv('DBDATABASE')
-    }
-    cnx = MySQLdb.connect(**dbconfig)
+    load_dotenv()
+    prefix = os.getenv("MQTT_TOPIC_PREFIX", "house/wx/")
+    if not prefix.endswith("/"):
+        prefix += "/"
+    readings = fetch_readings(
+        os.getenv("MQTT_HOST", "master"),
+        int(os.getenv("MQTT_PORT", "1883")),
+        prefix,
+        float(os.getenv("MQTT_TIMEOUT", "10")),
+    )
+    missing = [t for t in TOPICS if t not in readings]
+    if missing:
+        print("No data for: " + ", ".join(missing), file=sys.stderr)
 
-    now = datetime.now()
-    # now = datetime.fromtimestamp(1617352500)
-    current_timestamp = now.timestamp()
-    tz = get_localzone()
-    UTC = zoneinfo.ZoneInfo("UTC")
-    utc = now.astimezone(UTC)
-    midnight_timestamp = datetime.combine(now, time.min).timestamp()
-
-    wind_direction = get_wind_direction(cnx, current_timestamp)
-    wind_speed = get_wind_speed(cnx, current_timestamp)
-    wind_gust = get_wind_gust(cnx, current_timestamp)
-    temperature = get_temperature(cnx, current_timestamp)
-    rain_hour = get_rain_hour(cnx, current_timestamp)
-    rain_24hour = get_rain_24hour(cnx, current_timestamp)
-    rain_midnight = get_rain_midnight(cnx, current_timestamp, midnight_timestamp)
-    pressure = get_pressure(cnx, current_timestamp)
-    humidity = get_humidity(cnx, current_timestamp)
-    lat_formatted = format_latitude()
-    long_formatted = format_longitude()
-
-    print("@%sz%s/%s%s%s%s%s%s%s%s%s%s" % (utc.strftime("%d%H%M"), lat_formatted, long_formatted, wind_direction,
-                                           wind_speed, wind_gust, temperature, rain_hour, rain_24hour, rain_midnight, pressure, humidity))
-
-    cnx.close()
+    utc = datetime.now(timezone.utc)
+    print("@%sz%s/%s%s%s%s%s%s%s%s%s%s" % (
+        utc.strftime("%d%H%M"), format_latitude(), format_longitude(),
+        get_wind_direction(readings), get_wind_speed(readings), get_wind_gust(readings),
+        get_temperature(readings), get_rain_hour(readings), get_rain_24hour(readings),
+        get_rain_midnight(readings), get_pressure(readings), get_humidity(readings)))
 
 
 if __name__ == "__main__":

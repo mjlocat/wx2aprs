@@ -1,12 +1,12 @@
 # wx2aprs
-This project is meant to be used in conjunction with the database written to by the [WeatherStation](https://github.com/mjlocat/WeatherStation) project. It reads the weather history and formats an appropriate APRS message to be sent over the air.
+This project reads weather readings from an MQTT broker (topics under `house/wx/`) and formats an appropriate APRS message to be sent over the air. Averaging and smoothing are done upstream; the values are used as published.
 
 ## Prerequisites
 
 * python3 and pip3
 * A Linux system with the AX.25 stack configured properly
 * The `beacon` program
-* The [WeatherStation](https://github.com/mjlocat/WeatherStation) project running and writing weather data to a database
+* An MQTT broker publishing the weather topics (see below)
 
 ## Installation
 
@@ -37,12 +37,6 @@ This project is meant to be used in conjunction with the database written to by 
 
 * Optional comment
 
-## Notes
+## MQTT topics
 
-I've found that the readings I'm getting off the weather station have occasional erroneous values. Some examples I've found:
-
-* Temperature reading of 164 degrees, skewing the 5 minute temperature average by 9 degrees
-* Wind speed reading of 158 MPH, resulting in a bad 5 minute wind gust
-* Rain reading jumping from 53 to 99 and back to 53, resulting in an inch of rain being recorded
-
-To resolve this, we need to find a way to smooth out these erroneous values using a filter. The scipy signal module has a function called medfilt which will filter an array using the median value over a sliding window. After some testing, this seems to have done the trick. I'm using the default window size of 3 to start. If consecutive erroneous values come up, that window size will not be enough and will have to widen it to compensate. Had this happen with the rain sensor so extended the window size to 5 and added it as an environment variable.
+Under the configured prefix (default `house/wx/`): `wind_dir_avg_5m`, `wind_speed_avg_5m`, `wind_speed_peak_5m`, `temperature_avg_5m`, `humidity_avg_5m`, `rain_1h`, `rain_24h`, `rain_today` (rain in inches). Pressure is not yet published, so it is reported as unavailable (`b.....`). Any missing topic is reported as dots in the APRS string.

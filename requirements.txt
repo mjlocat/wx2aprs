@@ -1,5 +1,2 @@
 python-dotenv==0.15.0
-MySQLdb==2.2.7
-tzlocal==2.1
-scipy==1.12.0
-numpy==1.26.4
+paho-mqtt>=2.0
